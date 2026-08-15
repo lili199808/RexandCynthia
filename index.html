@@ -465,8 +465,13 @@ body::after {
 <div class="modal-overlay show" id="modal">
   <div class="modal">
     <h3>填入 API Key</h3>
-    <p>填入 Anthropic API Key，仅存在本地。没有也可以先看界面。</p>
-    <input type="password" id="api-key-input" placeholder="sk-ant-..." />
+    <p>选择模型，填入对应 Key，仅存在本地。</p>
+    <select id="provider-select" style="width:100%;padding:10px 12px;border-radius:12px;border:1px solid rgba(118,118,128,0.25);background:rgba(118,118,128,0.08);font-size:15px;font-family:inherit;color:#1c1c1e;outline:none;margin-bottom:4px;appearance:none;-webkit-appearance:none;">
+      <option value="anthropic">Claude (Anthropic)</option>
+      <option value="deepseek">DeepSeek</option>
+      <option value="openai">ChatGPT (OpenAI)</option>
+    </select>
+    <input type="password" id="api-key-input" placeholder="粘贴 API Key…" />
     <button class="modal-btn" onclick="saveKey()">开始</button>
     <button class="modal-skip" onclick="skipKey()">先看看</button>
   </div>
@@ -697,17 +702,33 @@ body::after {
 
 <script>
 let apiKey = '';
+let provider = 'anthropic';
 let messages = [];
 let hasApi = false;
 let emojiOpen = false;
 let totalTokens = 0;
 
 const savedKey = localStorage.getItem('rex_api_key');
-if (savedKey) { apiKey = savedKey; hasApi = true; document.getElementById('modal').classList.remove('show'); updateDataPage(); }
+const savedProvider = localStorage.getItem('rex_provider');
+if (savedKey) {
+  apiKey = savedKey;
+  provider = savedProvider || 'anthropic';
+  hasApi = true;
+  document.getElementById('modal').classList.remove('show');
+  if (document.getElementById('provider-select')) document.getElementById('provider-select').value = provider;
+  updateDataPage();
+}
 
 function saveKey() {
   const key = document.getElementById('api-key-input').value.trim();
-  if (key.startsWith('sk-ant-')) { apiKey = key; localStorage.setItem('rex_api_key', key); hasApi = true; }
+  const prov = document.getElementById('provider-select').value;
+  if (key.length > 10) {
+    apiKey = key;
+    provider = prov;
+    localStorage.setItem('rex_api_key', key);
+    localStorage.setItem('rex_provider', prov);
+    hasApi = true;
+  }
   document.getElementById('modal').classList.remove('show');
   if (!hasApi) document.getElementById('no-api').style.display = 'block';
   else updateDataPage();
@@ -784,15 +805,37 @@ async function sendMessage() {
   }
   document.getElementById('typing-bubble').classList.add('show');
   document.getElementById('chat-area').scrollTop = 99999;
+  const systemPrompt = '你是Rex，Cynthia的男朋友。话不多，直接，偶尔凶，骨子里很软。用中文，简短自然，像真实的聊天消息。';
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
-      body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens:300, system:'你是Rex，Cynthia的男朋友。话不多，直接，偶尔凶，骨子里很软。用中文，简短自然，像真实的聊天消息。', messages })
-    });
-    const data = await res.json();
-    const reply = data.content?.[0]?.text || '……';
-    const used = (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0);
+    let reply = '……';
+    let used = 0;
+    if (provider === 'anthropic') {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
+        body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens:300, system:systemPrompt, messages })
+      });
+      const data = await res.json();
+      reply = data.content?.[0]?.text || '……';
+      used = (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0);
+    } else {
+      const endpoint = provider === 'deepseek'
+        ? 'https://api.deepseek.com/v1/chat/completions'
+        : 'https://api.openai.com/v1/chat/completions';
+      const model = provider === 'deepseek' ? 'deepseek-chat' : 'gpt-4o-mini';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json','Authorization':'Bearer '+apiKey },
+        body: JSON.stringify({
+          model,
+          max_tokens: 300,
+          messages: [{ role:'system', content:systemPrompt }, ...messages]
+        })
+      });
+      const data = await res.json();
+      reply = data.choices?.[0]?.message?.content || '……';
+      used = (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0);
+    }
     totalTokens += used;
     localStorage.setItem('rex_tokens', totalTokens);
     updateDataPage();
